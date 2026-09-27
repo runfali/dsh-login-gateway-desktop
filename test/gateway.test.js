@@ -547,16 +547,23 @@ test('tls.enabled 但证书不可读时启动显式失败（fail-fast）', async
   )
 })
 
-test('用户文件损坏时启动报错不静默重置', async () => {
+test('用户文件损坏时不静默重置：降级为未初始化，且不能凭「文件坏了」白拿账号', async () => {
+  // 审计第一轮改判（2026-09-27）：
+  //   旧契约是「启动直接抛错」。它护住的是「不能让人靠破坏 users.json 静默重置账号」，
+  //   但代价是插件挂载失败 = 局域网入口彻底不存在——在桌面端这是最糟的失败形态
+  //   （用户双击应用，端口就是不开，线索只在宿主 stderr 里）。
+  //   新契约把两者都保住：隔离损坏文件 → 退回未初始化 → **必须持有一性令牌**才能重建。
+  //   攻击者要能改 users.json，得先有这台机器的文件系统写权限；而令牌另存于
+  //   setup-token.txt（0600）并打印到宿主控制台，所以「破坏文件」并换不来白拿账号。
   const { apply } = await import('../src/index.js')
-  const { makeCtx, tempDir } = await import('./helpers.js')
+  const { makeCtx, tempDir, request } = await import('./helpers.js')
   const { writeFileSync } = await import('node:fs')
   const dir = tempDir()
   const userStorePath = path.join(dir, 'users.json')
   writeFileSync(userStorePath, '{broken json!!')
   const pack = makeCtx()
   const port = await (await import('./helpers.js')).freePort()
-  assert.throws(
+  assert.doesNotThrow(
     () =>
       apply(pack.ctx, {
         listenHost: '127.0.0.1',
@@ -564,8 +571,16 @@ test('用户文件损坏时启动报错不静默重置', async () => {
         userStorePath,
         settingsFilePath: path.join(dir, 'settings.yaml'),
       }),
-    /用户文件格式错误/,
+    '损坏的用户文件不得让插件挂载失败（端口必须照常监听）',
   )
+  // 安全属性：仅凭「把文件弄坏」无法建号——/setup 仍要一次性令牌
+  const bad = await request(port, 'POST', '/setup', {
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ token: 'WRONG-TOKEN', username: 'attacker', password: 'Str0ngPassw0rd!', password2: 'Str0ngPassw0rd!' }),
+  })
+  assert.equal(bad.status, 400, '错误令牌必须被拒（不得因文件损坏就跳过令牌校验）')
+  assert.match(bad.body, /一次性令牌/, '拒绝原因应指向令牌')
+  pack.dispose()
 })
 
 test('审计日志：登录成功/失败/锁定均留痕（IP+用户名，净化换行）', async () => {

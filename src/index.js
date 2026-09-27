@@ -21,7 +21,7 @@ import { dirname } from 'node:path'
 import { asString, checkNewPassword, checkUsername, fakeVerifyAsync, GlobalAuthThrottle, hashPassword, LoginLimiter, normalizeIp, safeEqualStr, SessionStore, uaBindKey, verifyPasswordAsync } from './auth.js'
 import { dshAuthCookieName, nativeOpenAvailable, proxyRequest, proxyUpgrade } from './proxy.js'
 import { defaultSettingsFilePath, settingsFilePayload } from './settings-file.js'
-import { loadUsersSync, saveUsersSync } from './user-store.js'
+import { loadUsersSync, quarantineUsersSync, saveUsersSync } from './user-store.js'
 import { loginPageHtml } from './login-page.js'
 import { setupPageHtml } from './setup-page.js'
 
@@ -345,16 +345,27 @@ export function apply(ctx, config = {}) {
     return true
   }
 
-  // 用户加载：文件存在 → 已初始化；不存在 → 未初始化
+  // 用户加载：文件存在 → 已初始化；不存在/损坏 → 未初始化（可走 /setup 自救）
+  const makeSetupToken = () => randomBytes(16).toString('hex').toUpperCase().replace(/(.{4})(?=.)/g, '$1-')
   const fileUsers = loadUsersSync(cfg.userStorePath)
-  if (fileUsers !== null) {
+  if (fileUsers !== null && !fileUsers.corrupt) {
     users = fileUsers
     initialized = true
     removeSetupToken(cfg.userStorePath, log)
     log(`已从用户文件加载 ${users.length} 个用户`)
-    if (users.length === 0) log(`用户文件不含任何账号（${cfg.userStorePath}），按未初始化处理`, 'warn')
   } else {
-    setupToken = randomBytes(16).toString('hex').toUpperCase().replace(/(.{4})(?=.)/g, '$1-')
+    if (fileUsers?.corrupt) {
+      // 损坏不能让插件挂载失败：插件挂不上 = 局域网入口彻底消失，而用户几乎不可能
+      // 从宿主 stderr 里归因。改为隔离损坏文件 + 退回未初始化，让用户走 /setup 自救。
+      const backup = quarantineUsersSync(cfg.userStorePath)
+      log(
+        `用户文件损坏（${fileUsers.reason}）：${cfg.userStorePath}。` +
+        (backup ? `已备份为 ${backup}，` : '备份失败（原文件保持不动），') +
+        `门卫按「未初始化」启动，请访问 /setup 重新创建管理员账号`,
+        'warn',
+      )
+    }
+    setupToken = makeSetupToken()
     // 三通道输出，确保令牌可见：console 直出 stdout + ctx.logger + 写入文件（0600）
     const tokenMsg = `登录门卫未初始化，请访问 http://<主机>:${cfg.listenPort}/setup 并输入一次性令牌：${setupToken}`
     // 未初始化是需要人工介入的状态：降级成 info 容易被淹没，统一走 warn 级别
