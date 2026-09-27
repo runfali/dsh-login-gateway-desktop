@@ -192,7 +192,7 @@ function normalizeTlsConfig(raw) {
  * @param {{ targetHost: string, targetPort: number }} cfg
  * @returns {{ cookieName: string, token: string } | null}
  */
-function resolveDshAuth(ctx, cfg) {
+function resolveDshAuth(ctx, cfg, targetPort) {
   let conn
   try {
     conn = typeof ctx?.get === 'function' ? ctx.get('connection') : null
@@ -201,14 +201,51 @@ function resolveDshAuth(ctx, cfg) {
   }
   if (typeof conn?.authenticatedUrl !== 'function') return null
   try {
-    // authority 必须与门卫改写后的 Host 逐字一致（宿主按 Host 反查 Cookie 名与签名受众）
-    const authority = new URL(`http://${cfg.targetHost}:${cfg.targetPort}`).host
+    // authority 必须与门卫改写后的 Host 逐字一致（宿主按 Host 反查 Cookie 名与签名受众）。
+    // targetPort 必须与本次请求的反代目标**同源**（见 resolveTarget），否则 cookie 名反推错。
+    const authority = new URL(`http://${cfg.targetHost}:${targetPort}`).host
     const token = new URL(conn.authenticatedUrl(`http://${authority}`)).searchParams.get('token')
     if (!token) return null
     return { cookieName: dshAuthCookieName(authority), token }
   } catch {
     return null
   }
+}
+
+/**
+ * 解析反代目标端口（**自动发现**，2026-09-27 起为默认行为）。
+ *
+ * 为什么不能把 19387 当唯一来源：它只是 `dsh-desktop-host` 里写死的字面量
+ * （`args: [--port, 19387]`，无环境变量、无配置项），会被 profile 层的 `webserver`
+ * 行覆盖，也可能随上游版本漂移——一旦变了，用户看到的是「登录成功但页面全白」。
+ *
+ * 优先级：显式配置 > 宿主 `webServer` 的实测监听端口 > 兜底 19387。
+ *
+ * `authoritative` 表示这次结果**可信到可以缓存**：配置给的，或宿主真实 listen 出来的端口。
+ * 非权威（服务还没挂载 / 端口还是 0 / 取到脏值）必须下次重查，不得缓存——
+ * 否则会把错值钉死，令牌交换的 authority 随之算错（同审计第四轮的 cookie 名坑）。
+ *
+ * @param {{ targetPort?: number|null, ctx?: any, fallback?: number }} opts
+ * @returns {{ port: number, authoritative: boolean }}
+ */
+export function resolveTargetPort({ targetPort, ctx, fallback = 19387 } = {}) {
+  // 1) 显式配置：最权威，压过宿主实测端口（保留旧用法，向后兼容）
+  if (targetPort !== undefined && targetPort !== null) {
+    const port = Number(targetPort)
+    if (Number.isInteger(port) && port > 0 && port <= 65535) return { port, authoritative: true }
+    // 显式配置写脏了也不能带进反代，按未配置处理（回落 + 下次重查）
+    return { port: fallback, authoritative: false }
+  }
+  // 2) 宿主实测端口：webServer 由 dsh-host-webserver 注册，服务名是 'webServer'；
+  //    端口在 listen 成功后才写入 listenedPort，取到 0/undefined 说明还没就绪。
+  let port
+  try {
+    port = ctx?.get?.('webServer')?.port
+  } catch {
+    return { port: fallback, authoritative: false } // 服务未挂载：本次回落，下次重试
+  }
+  if (Number.isInteger(port) && port > 0 && port <= 65535) return { port, authoritative: true }
+  return { port: fallback, authoritative: false }
 }
 
 /**
@@ -230,8 +267,10 @@ export function resolveConfig(config = {}) {
     // 两个 profile 可能同时挂着各自的插件，撞端口会 EADDRINUSE。
     listenPort: raw.listenPort ?? 3082,
     targetHost: raw.targetHost ?? '127.0.0.1',
-    // 19387：dsh-desktop-host 用 --port 19387 固定桌面宿主（不是 dsh web 的 3080）。
-    targetPort: raw.targetPort ?? 19387,
+    // null = 自动发现：未显式配置时由 resolveTarget() 运行时读宿主 webServer 的
+    // 实测监听端口（兜底 19387）。19387 只是 dsh-desktop-host 写死的当前字面量，
+    // 会被 profile 层 webserver 行覆盖、也会随版本漂移，不能当唯一来源。
+    targetPort: raw.targetPort ?? null,
     sessionTtlHours: raw.sessionTtlHours ?? 24,
     maxLoginAttempts: raw.maxLoginAttempts ?? 5,
     lockMinutes: raw.lockMinutes ?? 5,
@@ -281,11 +320,29 @@ export function apply(ctx, config = {}) {
    * 早期实现把 null 也当成"已解析"缓存住，导致 connection 挂载晚于首请求时
    * 令牌交换在本进程内永久失效（实测：首请求时服务未挂载 → 之后所有首页导航都 401）。
    */
+  /**
+   * 惰性解析反代目标端口（自动发现）。
+   *
+   * 与 getDshAuth 同一套「非权威不缓存」策略：权威结果（配置给的 / 宿主真实 listen 出的）
+   * 落地缓存；非权威（webServer 还没挂载）不缓存，下次请求重查。
+   * 这样「服务未就绪」与「服务永远缺失」共用同一条降级路径，且不会把错值钉死。
+   */
+  let targetPortCache
+  const resolveTarget = () => {
+    if (targetPortCache !== undefined) return { port: targetPortCache, authoritative: true }
+    const resolved = resolveTargetPort({ targetPort: cfg.targetPort, ctx })
+    if (resolved.authoritative) targetPortCache = resolved.port
+    return resolved
+  }
   let dshAuthCache
   const getDshAuth = () => {
     if (dshAuthCache !== undefined) return dshAuthCache
-    const resolved = resolveDshAuth(ctx, cfg)
-    if (resolved) dshAuthCache = resolved
+    // authority 必须与本次反代目标同源：同一个 resolveTarget() 取端口，
+    // 否则 cookie 名反推错（审计第四轮的 cookie 名坑同源）
+    const { port, authoritative } = resolveTarget()
+    const resolved = resolveDshAuth(ctx, cfg, port)
+    // 非权威端口算出来的 authority 不可信 → 不缓存，等权威了再重算
+    if (resolved && authoritative) dshAuthCache = resolved
     return resolved
   }
   const sessions = new SessionStore(cfg.sessionTtlHours * 3600_000, cfg.maxSessions)
@@ -603,7 +660,10 @@ export function apply(ctx, config = {}) {
       return
     }
 
-    return proxyRequest(req, res, cfg.targetHost, cfg.targetPort, cfg.proxyTimeoutMs, cfg.streamIdleTimeoutMs, {
+    // 反代目标与令牌交换 authority 必须同源：先解析一次目标端口。
+    // （getDshAuth 内部走同一个 resolveTarget()，同一请求内缓存状态相同，取值一致）
+    const dest = resolveTarget()
+    return proxyRequest(req, res, cfg.targetHost, dest.port, cfg.proxyTimeoutMs, cfg.streamIdleTimeoutMs, {
       clientLoopbackTrust: cfg.clientLoopbackTrust,
       settingsDownload: cfg.settingsFileDownload && !nativeOpenAvailable(),
       trustProxy: cfg.trustProxy,
@@ -647,7 +707,7 @@ export function apply(ctx, config = {}) {
       socket.destroy()
       return
     }
-    proxyUpgrade(req, socket, head, cfg.targetHost, cfg.targetPort, cfg.proxyTimeoutMs, { trustProxy: cfg.trustProxy })
+    proxyUpgrade(req, socket, head, cfg.targetHost, resolveTarget().port, cfg.proxyTimeoutMs, { trustProxy: cfg.trustProxy })
   })
 
   // 并发上限 + 收紧超时防 slowloris（Node 默认 headersTimeout 60s 过长）：
@@ -668,7 +728,16 @@ export function apply(ctx, config = {}) {
     const addr = server.address()
     const shown = typeof addr === 'object' && addr ? addr.port : cfg.listenPort
     const scheme = tlsCfg ? 'https' : 'http'
-    log(`外部入口已启动：${scheme}://${cfg.listenHost}:${shown}（反代至 http://${cfg.targetHost}:${cfg.targetPort}）`)
+    // 日志必须如实反映**这次实际用的端口与来源**，不能因为「配置是自动」就宣称发现成功：
+    // 显式配置 → 直说；自动且权威 → 自动发现；自动但没拿到（webServer 未就绪）→ 兜底，
+    // 让排障的人一眼看出「这里打的是兜底值，宿主端口可能另有其值」。
+    const dest = resolveTarget()
+    const mode = cfg.targetPort !== null
+      ? ''
+      : dest.authoritative
+        ? '，自动发现'
+        : `，兜底（宿主 webServer 未就绪，本行仅参考；下次请求重查）`
+    log(`外部入口已启动：${scheme}://${cfg.listenHost}:${shown}（反代至 http://${cfg.targetHost}:${dest.port}${mode}）`)
   })
 
   const sweepTimer = setInterval(() => {

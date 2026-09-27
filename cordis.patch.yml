@@ -21,7 +21,10 @@
         listenHost: '0.0.0.0'
         listenPort: 3082
         targetHost: '127.0.0.1'
-        targetPort: 19387
+        # targetPort 故意不写：留空 = 自动发现（运行时读宿主 webServer 的实测监听端口，
+        # 取不到才回落 19387）。钉死在这里会让自动发现永远不生效，而 19387 只是
+        # dsh-desktop-host 当前写死的字面量，会被 profile 层 webserver 行覆盖。
+        # 需要固定到某个端口时，再在 profile 用户层显式写 targetPort 即可（优先级最高）。
         sessionTtlHours: 24
         maxLoginAttempts: 5
         lockMinutes: 5

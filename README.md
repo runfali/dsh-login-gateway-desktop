@@ -20,7 +20,7 @@ dsh Desktop 的宿主进程（`dsh-desktop-host` 拉起）只监听 `127.0.0.1:1
 | 项 | web 版 dsh-login-gateway | 本仓（桌面版） |
 |---|---|---|
 | 外部入口端口 | 3081 | **3082** |
-| 反代目标 | 127.0.0.1:**3080**（`dsh web`） | 127.0.0.1:**19387**（dsh Desktop 宿主） |
+| 反代目标 | 127.0.0.1:**3080**（`dsh web`） | **自动发现**宿主实测端口，兜底 127.0.0.1:**19387**（dsh Desktop 宿主） |
 | 用户存储 | `~/.dsh-login-gateway/` | `~/.dsh-login-gateway-desktop/` |
 | 安装 profile | `web`（`dsh plugin --profile web add`） | `desktop`（应用内插件页，见下） |
 | 登录墙 / 反代 / 令牌交换 / 限速 / 改密 | 完全相同 | 完全相同 |
@@ -126,7 +126,8 @@ pnpm add "link:D:/DSH/dsh-login-gateway-desktop"
     listenHost: '0.0.0.0'
     listenPort: 3082
     targetHost: '127.0.0.1'
-    targetPort: 19387
+    # targetPort 故意不写 = 自动发现（运行时读宿主 webServer 实测端口，取不到才兜底 19387）。
+    # 需要强制钉到某个端口时才在这里显式写，写了它发现就不再生效。
     sessionTtlHours: 24
     maxLoginAttempts: 5
     lockMinutes: 5
@@ -140,7 +141,7 @@ pnpm add "link:D:/DSH/dsh-login-gateway-desktop"
 | `listenHost` | `0.0.0.0` | 门卫监听地址 |
 | `listenPort` | `3082` | 门卫监听端口（3081 留给 web 版） |
 | `targetHost` | `127.0.0.1` | 桌面宿主地址 |
-| `targetPort` | `19387` | 桌面宿主端口（dsh-desktop-host 的固定值） |
+| `targetPort` | *自动发现* | 不写 = 运行时读宿主 `webServer` 实测端口，取不到才兜底 19387；显式写则钉死 |
 | `sessionTtlHours` | `24` | 登录会话有效期 |
 | `maxLoginAttempts` | `5` | 单维度失败上限 |
 | `lockMinutes` | `5` | 触发上限后的锁定时长 |
@@ -157,7 +158,7 @@ pnpm add "link:D:/DSH/dsh-login-gateway-desktop"
 |---|---|
 | 其他电脑连不上 | 防火墙没放行 3082；或门卫没起（看宿主日志里的 `外部入口已启动`） |
 | 登录后页面白屏 | 宿主没在跑：确认 dsh Desktop 开着，`netstat -ano | findstr 19387` 有监听 |
-| 登录后 `502` | 反代目标不可达：桌面宿主端口被改过时，同步改 `targetPort` |
+| 登录后 `502` | 反代目标不可达。看启动日志 `外部入口已启动…反代至 …`（会标注「自动发现/兜底」），确认它指的端口确实在听；只有日志显示「兜底」时才需要处理 |
 | 设置改了不生效 | `clientLoopbackTrust` 被关掉了，设置页退化成内存持久化 |
 | 页面能开但交互报错 | 非安全上下文缺 `crypto.randomUUID`：确认 HTML 注入没被前置反代剥掉 |
 | 忘记密码 | 删掉 `%USERPROFILE%\.dsh-login-gateway-desktop\users.json`，重启后重新走 `/setup` |
