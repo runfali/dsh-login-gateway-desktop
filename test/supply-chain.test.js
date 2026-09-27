@@ -172,3 +172,84 @@ test('engines 必须显式覆盖 0.1.5 与 0.1.7 预发布段（本仓的目标 
   assert.match(range, />=\s*0\.1\.5-(alpha|beta|rc)\.\d+/, 'engines 需显式包含 0.1.5 预发布下界')
   assert.match(range, />=\s*0\.1\.7-(alpha|beta|rc)\.\d+/, 'engines 需显式包含 0.1.7 预发布下界')
 })
+
+test('dsh 的 peer 兼容判定：本插件必须被桌面运行时 0.1.7-rc.2 接受', () => {
+  // 审计第三轮补测（2026-09-27）。这直接把交付时挂起的「未验证项 #1」变成可执行的守护。
+  //
+  // 判定逻辑**逐行复刻** dsh-app-boot/lib/index.js:286-313 的 evaluatePluginCompatibility：
+  //   1. 只检查 @deepseek-ai/dsh 与 @deepseek-ai/dsh-* 两类 peer
+  //   2. semver.satisfies(runtime, range, { includePrerelease: true })，空串视为不兼容
+  //   3. workspace:^ / ~ / * 视为「等于当前运行时」
+  // 用同一条规则跑真实 manifest，断言桌面运行时通过——安装 preflight 与启动 preflight
+  // 都是这条规则，所以本用例绿 ≈ 插件不会被兼容性闸门拦下。
+  //
+  // 自实现 semver 子集（不引依赖，见上文零依赖约束）：只支持本仓声明的
+  // 「>=X <Y」析取式，外加预发布比较规则。若将来改成别的形状（^ ~ 等），
+  // 本用例会因解析不了而报红——这是刻意的，避免守护静默失效。
+  const parse = (v) => {
+    const m = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(v)
+    if (!m) throw new Error(`无法解析版本：${v}`)
+    return { major: +m[1], minor: +m[2], patch: +m[3], pre: m[4] ?? null }
+  }
+  const cmp = (a, b) => {
+    for (const k of ['major', 'minor', 'patch']) if (a[k] !== b[k]) return a[k] < b[k] ? -1 : 1
+    if (a.pre === b.pre) return 0
+    if (a.pre === null) return 1
+    if (b.pre === null) return -1
+    const an = a.pre.split('.'), bn = b.pre.split('.')
+    for (let i = 0; i < Math.max(an.length, bn.length); i++) {
+      const x = an[i], y = bn[i]
+      if (x === undefined) return -1
+      if (y === undefined) return 1
+      const nx = /^\d+$/.test(x), ny = /^\d+$/.test(y)
+      if (nx && ny) { if (+x !== +y) return +x < +y ? -1 : 1; continue }
+      if (nx !== ny) return nx ? -1 : 1
+      if (x !== y) return x < y ? -1 : 1
+    }
+    return 0
+  }
+  /** 复刻 dsh 的判定：includePrerelease 语义下 range 是否覆盖 runtime。 */
+  const satisfies = (runtime, range) => {
+    if (range.trim() === '') return false
+    if (['workspace:^', 'workspace:~', 'workspace:*'].includes(range)) return true
+    const ver = parse(runtime)
+    return range.split('||').some((clause) => {
+      const parts = clause.trim().split(/\s+/).filter(Boolean)
+      let ok = true
+      let sawPrereleaseBoundOfSameTuple = false
+      for (const part of parts) {
+        let op = null, bound = null
+        if (part.startsWith('>=')) { op = '>='; bound = part.slice(2) }
+        else if (part.startsWith('<=')) { op = '<='; bound = part.slice(2) }
+        else if (part.startsWith('<')) { op = '<'; bound = part.slice(1) }
+        else if (part.startsWith('>')) { op = '>'; bound = part.slice(1) }
+        else { throw new Error(`不支持的区间片段（守护需同步更新）：${part}`) }
+        const b = parse(bound)
+        const c = cmp(ver, b)
+        if (op === '>=' && c < 0) ok = false
+        if (op === '<' && c >= 0) ok = false
+        if (op === '<=' && c > 0) ok = false
+        if (op === '>' && c <= 0) ok = false
+        // 预发布例外：runtime 本身是预发布时，区间内必须出现同元组预发布边界
+        if (b.pre !== null && b.major === ver.major && b.minor === ver.minor && b.patch === ver.patch) {
+          sawPrereleaseBoundOfSameTuple = true
+        }
+      }
+      if (ver.pre !== null && !sawPrereleaseBoundOfSameTuple) return false
+      return ok
+    })
+  }
+
+  const range = pkg.peerDependencies['@deepseek-ai/dsh']
+  assert.ok(typeof range === 'string' && range.length > 0, '必须声明 peerDependencies["@deepseek-ai/dsh"]')
+
+  // 桌面客户端当前捆的运行时（app.asar/desktop-runtime.json 的 release.version）
+  assert.ok(satisfies('0.1.7-rc.2', range), `桌面运行时 0.1.7-rc.2 不被区间「${range}」覆盖，安装会被拒`)
+  // web profile 常见版本，两仓并存时也必须在区间内
+  for (const rt of ['0.1.7-rc.1', '0.1.7-alpha.5', '0.1.5-rc.1', '0.1.2-alpha.3']) {
+    assert.ok(satisfies(rt, range), `dsh ${rt} 不被区间「${range}」覆盖`)
+  }
+  // 反向断言：区间必须真的排掉不支持的大版本，否则等于没声明
+  assert.equal(satisfies('0.2.0', range), false, '0.2.0 必须被判为不兼容')
+  assert.equal(satisfies('0.1.1', range), false, '0.1.1 必须被判为不兼容')
+})
