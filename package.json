@@ -1,0 +1,60 @@
+{
+  "name": "dsh-login-gateway-desktop",
+  "version": "0.1.7-rc.1",
+  "description": "DeepSeek Harness 桌面客户端（Electron）的登录门卫插件：为 dsh Desktop 的宿主（默认仅 127.0.0.1:19387）提供局域网访问入口 + 用户名密码登录验证",
+  "type": "module",
+  "main": "src/index.js",
+  "bin": {
+    "dsh-login-gateway-desktop-hash": "bin/hash.js"
+  },
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/runfali/dsh-login-gateway-desktop.git"
+  },
+  "dsh": {
+    "engines": {
+      "dsh": ">=0.1.2-alpha.3 <0.1.8 || >=0.1.5-alpha.1 <0.1.6 || >=0.1.7-alpha.0 <0.1.8"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-connection"
+      ],
+      "immediately": true
+    }
+  },
+  "exports": {
+    ".": "./src/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "bin",
+    "src",
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "auth",
+    "gateway",
+    "desktop"
+  ],
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh": ">=0.1.2-alpha.3 <0.1.8 || >=0.1.5-alpha.1 <0.1.6 || >=0.1.7-alpha.0 <0.1.8"
+  }
+}

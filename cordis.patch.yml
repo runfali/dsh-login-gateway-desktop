@@ -1,0 +1,28 @@
+# dsh-login-gateway-desktop bundle patch：随包自带的挂载层。
+#
+# 这是 dsh-login-gateway 的**桌面端**二次开发版本：同一套登录门卫 + 全量反代，
+# 但默认面向 dsh Desktop 的宿主进程，而不是 web profile。
+#
+#   桌面宿主：127.0.0.1:19387（Electron 固定，见 dsh-desktop-host 的 --port 19387）
+#   本插件入口：0.0.0.0:3082（3081 留给 web 端的 dsh-login-gateway，避免冲突）
+#
+# 桌面 profile 由 Electron 独占管理（dsh CLI 明确拒绝 --profile desktop），
+# 因此安装方式不是 `dsh plugin --profile desktop add`，详见 README「桌面端安装」。
+#
+# 本层只提供默认配置；个性化覆盖改在 profile 目录的 cordis.patch.yml 用户层，
+# 用 `- id: login-gateway` 覆盖（补丁是**整段替换** config，覆盖时要写全所有项）。
+#
+# 新装没有默认账号：首次启动进入"未初始化"状态，按 README「快速开始」
+# 拿一次性令牌，访问 /setup 创建管理员账号。
+- insert:
+    - id: login-gateway
+      name: 'dsh-login-gateway-desktop'
+      config:
+        listenHost: '0.0.0.0'
+        listenPort: 3082
+        targetHost: '127.0.0.1'
+        targetPort: 19387
+        sessionTtlHours: 24
+        maxLoginAttempts: 5
+        lockMinutes: 5
+        clientLoopbackTrust: true
