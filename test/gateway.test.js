@@ -533,14 +533,20 @@ test('bindUserAgent=false 时换 UA 不影响会话', async () => {
 
 test('tls.enabled 但证书不可读时启动显式失败（fail-fast）', async () => {
   const { apply } = await import('../src/index.js')
-  const { makeCtx } = await import('./helpers.js')
+  const { makeCtx, tempDir } = await import('./helpers.js')
   const pack = makeCtx()
   const port = await (await import('./helpers.js')).freePort()
+  // 显式给临时 userStorePath：本用例当前在 TLS 校验处就抛出（早于读用户文件），
+  // 但一旦 apply 内部顺序调整，缺省值会让它写到真实 ~/.dsh-login-gateway-desktop/。
+  // 加固成不依赖内部语句顺序。
+  const home = tempDir('gw-tls-')
   assert.throws(
     () =>
       apply(pack.ctx, {
         listenHost: '127.0.0.1',
         listenPort: port,
+        userStorePath: path.join(home, 'users.json'),
+        settingsFilePath: path.join(home, 'settings.yaml'),
         tls: { enabled: true, certPath: '/nonexistent/cert.pem', keyPath: '/nonexistent/key.pem' },
       }),
     /TLS 证书\/私钥读取失败/,

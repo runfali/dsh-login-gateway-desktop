@@ -105,9 +105,16 @@ export async function startGateway(overrides = {}, seedUsers = true, services = 
     ])
   }
   const pack = makeCtx(services)
+  // targetPort 必须给一个**明确的死端口**，否则会回落到插件默认值 19387 ——
+  // 也就是用户真实在跑的 dsh Desktop 宿主。实测（2026-09-27）：不传时测试会真的
+  // 把请求打到活宿主上（读到它的 401 正文），既是越权副作用，也让断言随宿主状态
+  // 时真时假。默认指向 freePort() 拿到的空闲端口（无人监听 → 502），
+  // 需要打真实宿主的用例（desktop-live-host）自己显式覆盖。
+  const deadTarget = await freePort()
   const cfg = {
     listenHost: '127.0.0.1',
     listenPort: await freePort(),
+    targetPort: deadTarget,
     userStorePath,
     settingsFilePath: path.join(home, 'settings.yaml'),
     ...overrides,
