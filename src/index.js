@@ -2,7 +2,7 @@
  * dsh-login-gateway-desktop 插件主入口（cordis 插件，零外部依赖）。
  *
  * 本仓是 dsh-login-gateway 的**桌面端**二次开发版：为 dsh Desktop（Electron）
- * 的宿主进程（默认仅 127.0.0.1:19387）提供局域网访问入口：
+ * 的宿主进程（只监听回环，反代目标端口运行时自动发现）提供局域网访问入口：
  * 用户名密码登录 + 会话 Cookie + 失败限速 + 全量反向代理（HTTP + WebSocket）。
  * 首次启动可通过 /setup 引导流程创建管理员账号（用户持久化，配置零写死）。
  *

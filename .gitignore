@@ -2,6 +2,8 @@ node_modules/
 .pnpm-store/
 pnpm-lock.yaml
 package-lock.json
+# pnpm install 在本仓（非 workspace 项目）自动生成的构建许可文件，不属于插件本身
+pnpm-workspace.yaml
 *.log
 .DS_Store
 
