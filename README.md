@@ -271,6 +271,52 @@ profile 配置是**加载期**读取的，改完必须重启桌面端才生效�
 
 ---
 
+## 版本兼容
+
+插件在 `package.json` 中声明了 `dsh.engines.dsh` 与 `peerDependencies["@deepseek-ai/dsh"]`
+（均为 `>=0.1.7-alpha.0 <0.1.8 || >=0.2.0-alpha.0 <0.3.0`）与 `engines.node`（`^22.19.0 || >=24.0.0`）。
+
+> **闸只读 `peerDependencies`**：dsh 在安装期（插件管理器 preflight）与启动期（profile
+> preflight）都会用 `peerDependencies` 对运行时版本做兼容校验（`includePrerelease: true`），
+> 不匹配的插件会被拒绝安装或**整个 bundle 不加载**（stderr：`skipping profile bundle`）。
+> 判定函数从不读 `dsh.engines.dsh`——两者必须逐字一致（`test/supply-chain.test.js` 守护）。
+> 宿主侧判定带 `includePrerelease`，而 pnpm 安装期是严格 semver——预发布版必须有**同元组**
+> 预发布下界才被满足，所以 0.1.7-`rc.*` 与 0.2.0-`rc.*` 各有自己的 clause。
+> 上界 `<0.3.0` 让未来的 `0.3.0-*` 必须先验证再放行。
+
+| dsh 桌面运行时 | 状态 |
+| --- | --- |
+| `0.1.5-*` / `0.1.6-*` 及更早 | ❌ 不支持（契约收窄，见下） |
+| `0.1.7-alpha.0` ~ `0.1.7-rc.*` | ✅ 正常工作 |
+| `0.2.0-alpha.0` ~ `0.2.0-rc.1` | ✅ **当前适配目标**；真机闸放行 + 对真实宿主实测通过（见下） |
+
+> 契约收窄（2026-09-27）：桌面运行时基线是 0.1.7-rc.2，旧线不再支持。保留 `>=0.1.5-` 段会让
+> pnpm 把 `@deepseek-ai/dsh` 解析到 `0.1.5-rc.3` 并装进本仓 `node_modules`（实测发生过）。
+
+### dsh 0.2.0-rc.1 适配结论
+
+对桌面端 `D:\DeepSeek Harness`（`DeepSeek Harness.exe` `FileVersion 0.2.0-rc.1`）做了
+asar 解包源码比对 + **真机闸实测**，要点：
+
+- **唯一必改项是兼容区间**：原 `>=0.1.7-alpha.0 <0.1.8` 在 0.2.0-rc.1 下被启动闸拒绝
+  （`skipping profile bundle "dsh-login-gateway-desktop"`），插件**整个 bundle 不加载**。
+  追加 `|| >=0.2.0-alpha.0 <0.3.0` 后放行。
+- **反代目标端口自动发现仍成立**：`dsh-desktop-host/lib/index.js:231-234` 依旧硬编码
+  `args: ["--no-open", "--port", "19387"]`，而插件优先读宿主 `webServer` 实测端口
+  （`dsh-host-webserver/lib/index.js:158` 注册名 `"webServer"`、`:164 get port()`），
+  取不到才兜底 19387 —— 该优先级链在 0.2.0 未变。
+- **信任围栏与浏览器鉴权零漂移**：`isTrustedApiRequest` / `COOKIE_PREFIX = "dsh-auth-"` /
+  `authenticatedUrl(baseUrl)` / `303` 令牌交换 / 401 文案全部与 0.1.7 逐字一致，
+  「改写三头」方案依旧必需。
+- **client bundle 无需改动**：`dsh-client-modules/lib/index.js:714` 仍只拒绝
+  `decl.platform !== 'web'`；client 侧 `isLoopback` 判定与 `$host`/`hostFacts` 缓存形状未变。
+- **真机闸实测**（宿主自带 app-boot 的真实判定函数）：`evaluatePluginCompatibility` → `undefined`
+  （放行）；`loadProfileDirectory('dsh', <desktop profile>, …)` 的 `skippedBundles`
+  中本插件已消失（跳过数 5 → 4）。
+
+测试：`node --test`（**172 例全绿**，含 3 例 `desktop-live-host` 对**真实运行中的 0.2.0-rc.1
+桌面宿主**实测：直连 401 基线、门卫改写 Host 后过栅栏、静态资源字节一致）。
+
 ## 开发
 
 ```sh

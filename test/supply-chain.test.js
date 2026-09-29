@@ -165,19 +165,27 @@ test('版本与兼容声明一致：engines 区间必须覆盖本仓库当前版
   assert.ok(satisfied, `本仓库版本 ${version} 不被自己声明的 engines 区间「${range}」覆盖`)
 })
 
-test('engines 必须显式覆盖 0.1.7 预发布段，且不得再声明 0.1.5 段（契约收窄）', () => {
+test('engines 必须显式覆盖 0.1.7 与 0.2.0 预发布段，且不得再声明 0.1.5 段（契约收窄）', () => {
   const range = pkg.dsh?.engines?.dsh ?? ''
   // dsh 侧用 includePrerelease:true 判定；pnpm 安装期则是严格 semver——预发布版本
-  // 必须有同元组预发布下界，所以 0.1.7-rc.* 需要自己的 clause。
+  // 必须有同元组预发布下界，所以 0.1.7-rc.* 与 0.2.0-rc.* 各需要自己的 clause。
   assert.match(range, />=\s*0\.1\.7-(alpha|beta|rc)\.\d+/, 'engines 需显式包含 0.1.7 预发布下界')
+  assert.match(range, />=\s*0\.2\.0-(alpha|beta|rc)\.\d+/, 'engines 需显式包含 0.2.0 预发布下界')
   // 契约收窄（2026-09-27）：桌面运行时基线是 0.1.7-rc.2，旧线（0.1.5/0.1.2）不再支持。
   // 保留 0.1.5 段会让 pnpm 把 @deepseek-ai/dsh 解析到 0.1.5-rc.3（实测 lockfile 钉死，
   // 装进本仓 node_modules 的就是错的版本）。
   assert.doesNotMatch(range, />=\s*0\.1\.5-/, 'engines 不得再声明 0.1.5 预发布下界')
+  // 兼容闸（app-boot 的 evaluatePluginCompatibility）**只**读 peerDependencies 里
+  // @deepseek-ai/dsh* 的条目，从不读 dsh.engines.dsh。两者必须逐字一致。
+  assert.equal(
+    pkg.peerDependencies['@deepseek-ai/dsh'], range,
+    'peerDependencies["@deepseek-ai/dsh"] 必须与 dsh.engines.dsh 一致（闸只认前者）',
+  )
 })
 
-test('dsh 的 peer 兼容判定：本插件必须被桌面运行时 0.1.7-rc.2 接受', () => {
-  // 审计第三轮补测（2026-09-27）。这直接把交付时挂起的「未验证项 #1」变成可执行的守护。
+test('dsh 的 peer 兼容判定：本插件必须被桌面运行时 0.2.0-rc.1 接受', () => {
+  // 审计第四轮补测（2026-09-29，dsh 0.2.0-rc.1 适配轮）。延续上一轮把「未验证项」
+  // 变成可执行守护的做法。
   //
   // 判定逻辑**逐行复刻** dsh-app-boot/lib/index.js:286-313 的 evaluatePluginCompatibility：
   //   1. 只检查 @deepseek-ai/dsh 与 @deepseek-ai/dsh-* 两类 peer
@@ -246,11 +254,15 @@ test('dsh 的 peer 兼容判定：本插件必须被桌面运行时 0.1.7-rc.2 �
   const range = pkg.peerDependencies['@deepseek-ai/dsh']
   assert.ok(typeof range === 'string' && range.length > 0, '必须声明 peerDependencies["@deepseek-ai/dsh"]')
 
-  // 桌面客户端当前捆的运行时（app.asar/desktop-runtime.json 的 release.version）
-  assert.ok(satisfies('0.1.7-rc.2', range), `桌面运行时 0.1.7-rc.2 不被区间「${range}」覆盖，安装会被拒`)
-  // 同 0.1.7 线的其它预发布版本也必须在区间内（版本漂移时不至于突然失配）
-  for (const rt of ['0.1.7-rc.1', '0.1.7-alpha.5', '0.1.7-alpha.1']) {
+  // 桌面客户端当前捆的运行时（app.asar 内 dsh/package.json 的 version，实测 0.2.0-rc.1）
+  assert.ok(satisfies('0.2.0-rc.1', range), `桌面运行时 0.2.0-rc.1 不被区间「${range}」覆盖，安装会被拒`)
+  // 0.2 线其它预发布与正式版也必须在区间内（版本漂移时不至于突然失配）
+  for (const rt of ['0.2.0-alpha.0', '0.2.0', '0.2.3']) {
     assert.ok(satisfies(rt, range), `dsh ${rt} 不被区间「${range}」覆盖`)
+  }
+  // 旧基线（0.1.7 线）不能因这次放宽而丢失
+  for (const rt of ['0.1.7-rc.2', '0.1.7-rc.1', '0.1.7-alpha.5', '0.1.7-alpha.1']) {
+    assert.ok(satisfies(rt, range), `回归：dsh ${rt} 不被区间「${range}」覆盖`)
   }
   // 契约收窄（2026-09-27）：旧线明确不再支持，必须被判为不兼容——否则 pnpm 会重新
   // 解析到 0.1.5-rc.3 并把它装进本仓 node_modules（实测已发生）。
@@ -258,6 +270,7 @@ test('dsh 的 peer 兼容判定：本插件必须被桌面运行时 0.1.7-rc.2 �
     assert.equal(satisfies(rt, range), false, `dsh ${rt} 已不在支持范围，必须被判为不兼容`)
   }
   // 反向断言：区间必须真的排掉不支持的大版本，否则等于没声明
-  assert.equal(satisfies('0.2.0', range), false, '0.2.0 必须被判为不兼容')
+  assert.equal(satisfies('0.3.0', range), false, '0.3.0 必须被判为不兼容')
+  assert.equal(satisfies('0.1.8', range), false, '0.1.8 必须被判为不兼容（未验证不提前放行）')
   assert.equal(satisfies('0.1.1', range), false, '0.1.1 必须被判为不兼容')
 })

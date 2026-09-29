@@ -1,6 +1,6 @@
 {
   "name": "dsh-login-gateway-desktop",
-  "version": "0.1.7-rc.2",
+  "version": "0.2.0-rc.1",
   "description": "DeepSeek Harness 桌面客户端（Electron）的登录门卫插件：为 dsh Desktop 的宿主（默认只监听回环，反代目标端口运行时自动发现）提供局域网访问入口 + 用户名密码登录验证",
   "type": "module",
   "main": "src/index.js",
@@ -17,7 +17,7 @@
   },
   "dsh": {
     "engines": {
-      "dsh": ">=0.1.7-alpha.0 <0.1.8"
+      "dsh": ">=0.1.7-alpha.0 <0.1.8 || >=0.2.0-alpha.0 <0.3.0"
     },
     "bundle": {
       "patch": "./cordis.patch.yml"
@@ -55,6 +55,6 @@
     "node": "^22.19.0 || >=24.0.0"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh": ">=0.1.7-alpha.0 <0.1.8"
+    "@deepseek-ai/dsh": ">=0.1.7-alpha.0 <0.1.8 || >=0.2.0-alpha.0 <0.3.0"
   }
 }
