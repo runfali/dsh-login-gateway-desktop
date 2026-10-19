@@ -165,12 +165,15 @@ test('版本与兼容声明一致：engines 区间必须覆盖本仓库当前版
   assert.ok(satisfied, `本仓库版本 ${version} 不被自己声明的 engines 区间「${range}」覆盖`)
 })
 
-test('engines 必须显式覆盖 0.1.7 与 0.2.0 预发布段，且不得再声明 0.1.5 段（契约收窄）', () => {
+test('engines 必须显式覆盖 0.1.7 / 0.2.0 / 0.2.1 预发布段，且不得再声明 0.1.5 段（契约收窄）', () => {
   const range = pkg.dsh?.engines?.dsh ?? ''
   // dsh 侧用 includePrerelease:true 判定；pnpm 安装期则是严格 semver——预发布版本
-  // 必须有同元组预发布下界，所以 0.1.7-rc.* 与 0.2.0-rc.* 各需要自己的 clause。
+  // 必须有同元组预发布下界，所以 0.1.7-rc.* / 0.2.0-rc.* / 0.2.1-rc.* 各需要自己的 clause。
+  // 0.2.1 段（2026-10-19 补）：桌面运行时已到 0.2.1-rc.2，缺该段时宿主闸靠
+  // includePrerelease 侥幸放行，但 pnpm 严格模式会拒——安装期与启动期判定分叉。
   assert.match(range, />=\s*0\.1\.7-(alpha|beta|rc)\.\d+/, 'engines 需显式包含 0.1.7 预发布下界')
   assert.match(range, />=\s*0\.2\.0-(alpha|beta|rc)\.\d+/, 'engines 需显式包含 0.2.0 预发布下界')
+  assert.match(range, />=\s*0\.2\.1-(alpha|beta|rc)\.\d+/, 'engines 需显式包含 0.2.1 预发布下界')
   // 契约收窄（2026-09-27）：桌面运行时基线是 0.1.7-rc.2，旧线（0.1.5/0.1.2）不再支持。
   // 保留 0.1.5 段会让 pnpm 把 @deepseek-ai/dsh 解析到 0.1.5-rc.3（实测 lockfile 钉死，
   // 装进本仓 node_modules 的就是错的版本）。
@@ -183,7 +186,7 @@ test('engines 必须显式覆盖 0.1.7 与 0.2.0 预发布段，且不得再声�
   )
 })
 
-test('dsh 的 peer 兼容判定：本插件必须被桌面运行时 0.2.0-rc.1 接受', () => {
+test('dsh 的 peer 兼容判定：本插件必须被桌面运行时 0.2.1-rc.2 接受', () => {
   // 审计第四轮补测（2026-09-29，dsh 0.2.0-rc.1 适配轮）。延续上一轮把「未验证项」
   // 变成可执行守护的做法。
   //
@@ -193,6 +196,13 @@ test('dsh 的 peer 兼容判定：本插件必须被桌面运行时 0.2.0-rc.1 �
   //   3. workspace:^ / ~ / * 视为「等于当前运行时」
   // 用同一条规则跑真实 manifest，断言桌面运行时通过——安装 preflight 与启动 preflight
   // 都是这条规则，所以本用例绿 ≈ 插件不会被兼容性闸门拦下。
+  //
+  // ⚠️ 模式说明（2026-10-19 补，勿删）：下面的自实现 satisfies **建模的是严格模式**
+  // （比较器 + 预发布可见性规则），不是宿主闸的 includePrerelease 纯比较器模式。
+  // 两种模式在「上界自身的预发布」上分叉（如 0.3.0-alpha.0：严格 false / 宿主 true）。
+  // 方向是安全的：严格 ⊂ 宿主闸的放行集，所以「严格通过 ⇒ 宿主闸必通过」，
+  // 本守护偏保守，不会出现「测试绿但真机被拒」。反之不成立，故不要把它当作
+  // 宿主闸的逐字复刻来断言「某版本必须被拒」——那类断言只有落在非分叉行上才成立。
   //
   // 自实现 semver 子集（不引依赖，见上文零依赖约束）：只支持本仓声明的
   // 「>=X <Y」析取式，外加预发布比较规则。若将来改成别的形状（^ ~ 等），
@@ -254,10 +264,11 @@ test('dsh 的 peer 兼容判定：本插件必须被桌面运行时 0.2.0-rc.1 �
   const range = pkg.peerDependencies['@deepseek-ai/dsh']
   assert.ok(typeof range === 'string' && range.length > 0, '必须声明 peerDependencies["@deepseek-ai/dsh"]')
 
-  // 桌面客户端当前捆的运行时（app.asar 内 dsh/package.json 的 version，实测 0.2.0-rc.1）
-  assert.ok(satisfies('0.2.0-rc.1', range), `桌面运行时 0.2.0-rc.1 不被区间「${range}」覆盖，安装会被拒`)
+  // 桌面客户端当前捆的运行时（app.asar 内 dsh/package.json 的 version，实测 0.2.1-rc.2）
+  assert.ok(satisfies('0.2.1-rc.2', range), `桌面运行时 0.2.1-rc.2 不被区间「${range}」覆盖，安装会被拒`)
+  assert.ok(satisfies('0.2.1-rc.1', range), `dsh 0.2.1-rc.1 不被区间「${range}」覆盖`)
   // 0.2 线其它预发布与正式版也必须在区间内（版本漂移时不至于突然失配）
-  for (const rt of ['0.2.0-alpha.0', '0.2.0', '0.2.3']) {
+  for (const rt of ['0.2.1-alpha.1', '0.2.1', '0.2.0-rc.2', '0.2.0-alpha.0', '0.2.0', '0.2.3']) {
     assert.ok(satisfies(rt, range), `dsh ${rt} 不被区间「${range}」覆盖`)
   }
   // 旧基线（0.1.7 线）不能因这次放宽而丢失

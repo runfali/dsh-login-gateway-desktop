@@ -1,15 +1,15 @@
 /**
- * 反代目标端口「自动发现」的回归（2026-09-27 新增）。
+ * 反代目标端口「自动发现」的回归（2026-09-27 新增，2026-10-19 按 0.2.1 修订）。
  *
- * 背景：19387 只是 dsh-desktop-host/lib/index.js:231 里写死的一个字面量
- * （args: ["--no-open","--port","19387"]，全文件仅此一处，无环境变量、无配置项）。
- * 它可能被 profile 层的 webserver 行覆盖，也可能随上游版本漂移——
- * 把它当唯一来源，一旦变了就表现为「登录成功但页面全白」，且无从归因。
+ * 背景：宿主端口**从来不是契约**。
+ *   - 0.1.x / 0.2.0：`dsh-desktop-host/lib/index.js` 硬编码 `args: ["--no-open","--port","19387"]`。
+ *   - **0.2.1 起：改为 `--port 0`**（内核分配随机端口，实测 32489），
+ *     `19387` 在整个 app.asar 中已搜不到。写死它的插件会「登录成功但页面全白」。
  *
- * 新契约（2026-09-27 拍板）：
+ * 新契约（2026-09-27 拍板，0.2.1 验证仍成立）：
  *   1. 显式配置 targetPort      -> 用配置值（最权威，保留旧用法）
  *   2. 未配置                   -> 读宿主 ctx.get('webServer').port（bind 后的实测值）
- *   3. 服务没挂载 / 拿不到端口  -> 回落 19387，并标记「非权威」（下次重查，不缓存）
+ *   3. 服务没挂载 / 拿不到端口  -> 回落兜底常量，并标记「非权威」（下次重查，不缓存）
  *
  * 为什么区分权威：令牌交换的 authority 必须与反代目标在同一次请求里取同一个值，
  * 否则 cookie 名反推错——审计第四轮那个假阳性正是「探针形状与真实宿主不一致」的同源问题。
@@ -40,12 +40,22 @@ test('resolveTargetPort：未配置时读宿主 webServer 实测端口', () => {
   assert.deepEqual(r, { port: 4567, authoritative: true })
 })
 
-test('resolveTargetPort：服务未挂载时回落 19387 且标记非权威（下次重查）', () => {
+test('resolveTargetPort：服务未挂载时回落兜底端口且标记非权威（下次重查）', () => {
   const ctxs = [null, undefined, {}, { get: () => undefined }, { get: () => ({}) }, { get: () => { throw new Error('not mounted') } }]
   for (const ctx of ctxs) {
     const r = resolveTargetPort({ targetPort: null, ctx })
     assert.equal(r.port, 19387, 'ctx=' + JSON.stringify(ctx) + ' 应回落到兜底端口')
     assert.equal(r.authoritative, false, '未拿到实测端口不得标记权威（否则会被缓存住错值）')
+  }
+})
+
+test('兜底端口只是最后手段：任何真实宿主端口都必须压过它（0.2.1 随机端口回归）', () => {
+  // 0.2.1 起桌面宿主用 --port 0，端口由内核分配（实测 32489）。这条守住
+  // 「实测值优先于兜底」——否则插件会一直往早已不存在的 19387 打。
+  for (const real of [32489, 50123, 19388]) {
+    const r = resolveTargetPort({ targetPort: null, ctx: { get: () => ({ port: real }) } })
+    assert.equal(r.port, real, `实测端口 ${real} 必须压过兜底 19387`)
+    assert.equal(r.authoritative, true)
   }
 })
 

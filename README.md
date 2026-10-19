@@ -7,8 +7,9 @@ dsh Desktop 的宿主进程（`dsh-desktop-host` 拉起）只监听回环地址�
 登录成功后再由门卫**全量反向代理**（HTTP + WebSocket）到桌面宿主。桌面宿主自己继续只监听回环。
 
 反代目标端口是**运行时自动发现**的（读宿主 `webServer` 的实测监听端口），不写死任何值：
-当前桌面宿主恰好是 `127.0.0.1:19387`，但那是 `dsh-desktop-host` 里的一个字面量，会被 profile
-层的 `webserver` 配置覆盖、也可能随版本漂移——钉死它会让插件在宿主换端口后静默代理到错误目标。
+0.1.x/0.2.0 的桌面宿主曾固定监听 `127.0.0.1:19387`，但**0.2.1 起 `dsh-desktop-host` 改用
+`--port 0`（随机端口，本机实测 `32489`）**——钉死端口会让插件在宿主换端口后静默代理到错误目标，
+表现为「登录成功但页面全白」。
 
 零运行时依赖（只用 Node.js 内置模块），Node 22+ ESM。
 
@@ -23,7 +24,7 @@ dsh Desktop 的宿主进程（`dsh-desktop-host` 拉起）只监听回环地址�
 > - 防火墙放行用的是 Windows 专用命令（`New-NetFirewallRule`），Linux/macOS 需自行等效配置；
 > - `nativeOpenAvailable()` 的原生"在应用中打开"分支只在 Windows 上验证过；
 > - 证书路径、令牌文件路径的写法按 Windows 习惯给出（`%USERPROFILE%`、盘符），其它平台需换成 POSIX 路径；
-> - 全部 172 个测试用例的实测环境是 Windows + Node 24。
+> - 全部 173 个测试用例的实测环境是 Windows + Node 24。
 >
 > 在其它平台使用前，请先跑 `node --test` 并自行验证局域网访问链路。
 
@@ -34,7 +35,7 @@ dsh Desktop 的宿主进程（`dsh-desktop-host` 拉起）只监听回环地址�
 | 项 | web 版 dsh-login-gateway | 本仓（桌面版） |
 |---|---|---|
 | 外部入口端口 | 3081 | **3082** |
-| 反代目标 | 固定 127.0.0.1:**3080**（`dsh web`） | **运行时自动发现**宿主 `webServer` 实测端口（取不到才兜底 19387），不写死 |
+| 反代目标 | 固定 127.0.0.1:**3080**（`dsh web`） | **运行时自动发现**宿主 `webServer` 实测端口，不写死（兜底值已失效，见「版本兼容」） |
 | 用户存储 | `~/.dsh-login-gateway/` | `~/.dsh-login-gateway-desktop/` |
 | 安装 profile | `web`（`dsh plugin --profile web add`） | `desktop`（应用内插件页，见下） |
 | 登录墙 / 反代 / 令牌交换 / 限速 / 改密 | 完全相同 | 完全相同 |
@@ -217,8 +218,8 @@ profile 配置是**加载期**读取的，改完必须重启桌面端才生效�
     listenHost: '0.0.0.0'
     listenPort: 3082
     targetHost: '127.0.0.1'
-    # targetPort 故意不写 = 自动发现（运行时读宿主 webServer 实测端口，取不到才兜底 19387）。
-    # 需要强制钉到某个端口时才在这里显式写，写了它发现就不再生效。
+    # targetPort 故意不写 = 自动发现（运行时读宿主 webServer 实测端口）。
+    # 0.2.1 起宿主端口是随机的（--port 0），兜底值已失效——除排障外不要显式写死。
     sessionTtlHours: 24
     maxLoginAttempts: 5
     lockMinutes: 5
@@ -232,7 +233,7 @@ profile 配置是**加载期**读取的，改完必须重启桌面端才生效�
 | `listenHost` | `0.0.0.0` | 门卫监听地址 |
 | `listenPort` | `3082` | 门卫监听端口（3081 留给 web 版） |
 | `targetHost` | `127.0.0.1` | 桌面宿主地址 |
-| `targetPort` | *自动发现* | 不写 = 运行时读宿主 `webServer` 实测端口，取不到才兜底 19387；显式写则钉死 |
+| `targetPort` | *自动发现* | 不写 = 运行时读宿主 `webServer` 实测端口；0.2.1 起宿主端口随机（`--port 0`），写死仅用于排障 |
 | `sessionTtlHours` | `24` | 登录会话有效期 |
 | `maxLoginAttempts` | `5` | 单维度失败上限 |
 | `lockMinutes` | `5` | 触发上限后的锁定时长 |
@@ -248,7 +249,7 @@ profile 配置是**加载期**读取的，改完必须重启桌面端才生效�
 | 现象 | 原因与处理 |
 |---|---|
 | 其他电脑连不上 | 防火墙没放行 3082；或门卫没起（看宿主日志里的 `外部入口已启动`） |
-| 登录后页面白屏 | 宿主没在跑：确认 dsh Desktop 开着，`netstat -ano | findstr LISTENING` 里有宿主进程在听回环端口 |
+| 登录后页面白屏 | 宿主没在跑：确认 dsh Desktop 开着，`netstat -ano | findstr LISTENING` 里有宿主进程在听回环端口。**0.2.1 起宿主端口是随机的**（`--port 0`），别按 19387 找 |
 | 登录后 `502` | 反代目标不可达。看启动日志 `外部入口已启动…反代至 …`（会标注「自动发现/兜底」），确认它指的端口确实在听；只有日志显示「兜底」时才需要处理 |
 | 设置改了不生效 | `clientLoopbackTrust` 被关掉了，设置页退化成内存持久化 |
 | 页面能开但交互报错 | 非安全上下文缺 `crypto.randomUUID`：确认 HTML 注入没被前置反代剥掉 |
@@ -274,48 +275,60 @@ profile 配置是**加载期**读取的，改完必须重启桌面端才生效�
 ## 版本兼容
 
 插件在 `package.json` 中声明了 `dsh.engines.dsh` 与 `peerDependencies["@deepseek-ai/dsh"]`
-（均为 `>=0.1.7-alpha.0 <0.1.8 || >=0.2.0-alpha.0 <0.3.0`）与 `engines.node`（`^22.19.0 || >=24.0.0`）。
+（均为 `>=0.1.7-alpha.0 <0.1.8 || >=0.2.0-alpha.0 <0.3.0 || >=0.2.1-alpha.0 <0.3.0`）与 `engines.node`（`^22.19.0 || >=24.0.0`）。
 
 > **闸只读 `peerDependencies`**：dsh 在安装期（插件管理器 preflight）与启动期（profile
 > preflight）都会用 `peerDependencies` 对运行时版本做兼容校验（`includePrerelease: true`），
 > 不匹配的插件会被拒绝安装或**整个 bundle 不加载**（stderr：`skipping profile bundle`）。
 > 判定函数从不读 `dsh.engines.dsh`——两者必须逐字一致（`test/supply-chain.test.js` 守护）。
 > 宿主侧判定带 `includePrerelease`，而 pnpm 安装期是严格 semver——预发布版必须有**同元组**
-> 预发布下界才被满足，所以 0.1.7-`rc.*` 与 0.2.0-`rc.*` 各有自己的 clause。
+> 预发布下界才被满足，所以 0.1.7-`rc.*`、0.2.0-`rc.*`、0.2.1-`rc.*` 各有自己的 clause。
 > 上界 `<0.3.0` 让未来的 `0.3.0-*` 必须先验证再放行。
 
 | dsh 桌面运行时 | 状态 |
 | --- | --- |
 | `0.1.5-*` / `0.1.6-*` 及更早 | ❌ 不支持（契约收窄，见下） |
 | `0.1.7-alpha.0` ~ `0.1.7-rc.*` | ✅ 正常工作 |
-| `0.2.0-alpha.0` ~ `0.2.0-rc.1` | ✅ **当前适配目标**；真机闸放行 + 对真实宿主实测通过（见下） |
+| `0.2.0-alpha.0` ~ `0.2.0-rc.*` | ✅ 正常工作 |
+| `0.2.1-alpha.0` ~ `0.2.1-rc.*` | ✅ **当前适配目标**；真机闸放行 + 对真实宿主实测通过（见下） |
 
 > 契约收窄（2026-09-27）：桌面运行时基线是 0.1.7-rc.2，旧线不再支持。保留 `>=0.1.5-` 段会让
 > pnpm 把 `@deepseek-ai/dsh` 解析到 `0.1.5-rc.3` 并装进本仓 `node_modules`（实测发生过）。
 
-### dsh 0.2.0-rc.1 适配结论
+### dsh 0.2.1-rc.2 适配结论（2026-10-19）
 
-对桌面端 `D:\DeepSeek Harness`（`DeepSeek Harness.exe` `FileVersion 0.2.0-rc.1`）做了
-asar 解包源码比对 + **真机闸实测**，要点：
+对桌面端 `D:\DeepSeek Harness`（`DeepSeek Harness.exe` `FileVersion 0.2.1-rc.2`）做了
+asar 解包源码比对 + **真机闸实测 + 真实宿主端到端实测**，要点：
 
-- **唯一必改项是兼容区间**：原 `>=0.1.7-alpha.0 <0.1.8` 在 0.2.0-rc.1 下被启动闸拒绝
-  （`skipping profile bundle "dsh-login-gateway-desktop"`），插件**整个 bundle 不加载**。
-  追加 `|| >=0.2.0-alpha.0 <0.3.0` 后放行。
-- **反代目标端口自动发现仍成立**：`dsh-desktop-host/lib/index.js:231-234` 依旧硬编码
-  `args: ["--no-open", "--port", "19387"]`，而插件优先读宿主 `webServer` 实测端口
-  （`dsh-host-webserver/lib/index.js:158` 注册名 `"webServer"`、`:164 get port()`），
-  取不到才兜底 19387 —— 该优先级链在 0.2.0 未变。
-- **信任围栏与浏览器鉴权零漂移**：`isTrustedApiRequest` / `COOKIE_PREFIX = "dsh-auth-"` /
-  `authenticatedUrl(baseUrl)` / `303` 令牌交换 / 401 文案全部与 0.1.7 逐字一致，
-  「改写三头」方案依旧必需。
-- **client bundle 无需改动**：`dsh-client-modules/lib/index.js:714` 仍只拒绝
-  `decl.platform !== 'web'`；client 侧 `isLoopback` 判定与 `$host`/`hostFacts` 缓存形状未变。
-- **真机闸实测**（宿主自带 app-boot 的真实判定函数）：`evaluatePluginCompatibility` → `undefined`
-  （放行）；`loadProfileDirectory('dsh', <desktop profile>, …)` 的 `skippedBundles`
-  中本插件已消失（跳过数 5 → 4）。
+- **⚠️ 反代目标端口不再是固定值（本轮唯一的破坏性变更）**：0.2.0 及更早的
+  `dsh-desktop-host/lib/index.js` 硬编码 `args: ["--no-open", "--port", "19387"]`；
+  **0.2.1 起改为 `--port 0`**（由内核分配随机端口，本机实测 `32489`），
+  `19387` 在整个 app.asar 中已**搜不到**。插件依赖的「优先读宿主 `webServer` 实测端口」
+  恰好正中要害——这也是它能在 0.2.1 上照常工作的原因；但**兜底值 19387 已彻底失效**，
+  任何钉死该端口的配置都会表现为「登录成功但页面全白」。
+  `test/desktop-live-host.test.js` 已改为**运行时发现**宿主端口（`DSH_DESKTOP_HOST_PORT`
+  → `DSH_WEB_URL` → 历史端口兜底），不再硬编码——否则该组用例会在 0.2.1 上**静默 SKIP**（实测踩过）。
+- **兼容区间补 0.2.1 段**：用宿主自带的 `evaluatePluginCompatibility` 实测——**旧区间
+  `… || >=0.2.0-alpha.0 <0.3.0` 在 0.2.1-rc.2 下同样 PASS**（宿主闸带 `includePrerelease`，
+  `<0.3.0` 会放行 0.2.1-rc.2），所以这不是「不补就加载不了」。补的理由是 **pnpm 安装期
+  的严格 semver 会拒**（`0.2.1-rc.2` 判定为 `strict=false / host=true`）——安装期与启动期分叉，
+  补上后两个模式一致为 `true`。反向对照：`>=0.1.7-alpha.0 <0.1.8` 被宿主闸拒（REJECT）。
+- **新增 Host/Origin 信任围栏，且「改写三头」方案依然必需且有效**：
+  0.2.1 的 `dsh-client-connection` 引入 `isTrustedApiRequest()`，对每个 `/api` 请求校验
+  Host（须为 loopback / bind 地址 / 显式 `trustedHosts`）与 `Origin` 同源、拒绝 `Sec-Fetch-Site: cross-site`。
+  **实测**（直打宿主）：非 loopback Host → `403 forbidden`；loopback Host → `401 unauthorized`。
+  门卫把 Host/Origin 改写为 loopback 形态后正常过栅栏（经门卫拿 401 而非 403）。
+- **浏览器鉴权契约零漂移**：`authenticatedUrl(baseUrl)`、`COOKIE_PREFIX = "dsh-auth-"`、
+  `303` 令牌交换、401 文案全部与 0.1.7/0.2.0 逐字一致（`sessionCookie` 仅新增可选 `secure` 形参，
+  默认 `false` 时输出与旧版逐字相同）。
+- **client bundle 无需改动**：`configForms` 服务、`remote.$host.isLoopback` / `hostFacts`
+  （缓存键仍是 `home`）、`__ModuleLoader__.load({id, factory})` 形状均未变。
+  `dsh-client-ui-settings` 0.2.1 移除了 `persistence` 字段（settings 不再有 memory/host 分叉），
+  本插件的兜底修复按 `owner.persistence !== undefined || owner.mirror` 门控，**遇到该字段缺失时
+  自动跳过**，属预期行为、非故障。
 
-测试：`node --test`（**172 例全绿**，含 3 例 `desktop-live-host` 对**真实运行中的 0.2.0-rc.1
-桌面宿主**实测：直连 401 基线、门卫改写 Host 后过栅栏、静态资源字节一致）。
+测试：`node --test`（**173 例全绿、0 跳过**，含 3 例 `desktop-live-host` 对**真实运行中的
+0.2.1-rc.2 桌面宿主**实测：直连 401 基线、门卫改写 Host 后过栅栏、响应字节一致）。
 
 ## 开发
 

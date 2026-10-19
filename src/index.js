@@ -215,11 +215,12 @@ function resolveDshAuth(ctx, cfg, targetPort) {
 /**
  * 解析反代目标端口（**自动发现**，2026-09-27 起为默认行为）。
  *
- * 为什么不能把 19387 当唯一来源：它只是 `dsh-desktop-host` 里写死的字面量
- * （`args: [--port, 19387]`，无环境变量、无配置项），会被 profile 层的 `webserver`
- * 行覆盖，也可能随上游版本漂移——一旦变了，用户看到的是「登录成功但页面全白」。
+ * 为什么不能写死端口：桌面宿主的监听端口**不是契约**。0.1.x/0.2.0 的
+ * `dsh-desktop-host` 曾硬编码 `args: [--port, 19387]`；**0.2.1 起改为
+ * `--port 0`（由内核分配随机端口，实测 32489）**，19387 已从整个 app.asar 消失。
+ * 写死它会表现为「登录成功但页面全白」，且无从归因。
  *
- * 优先级：显式配置 > 宿主 `webServer` 的实测监听端口 > 兜底 19387。
+ * 优先级：显式配置 > 宿主 `webServer` 的实测监听端口 > 兜底常量。
  *
  * `authoritative` 表示这次结果**可信到可以缓存**：配置给的，或宿主真实 listen 出来的端口。
  * 非权威（服务还没挂载 / 端口还是 0 / 取到脏值）必须下次重查，不得缓存——
@@ -268,8 +269,8 @@ export function resolveConfig(config = {}) {
     listenPort: raw.listenPort ?? 3082,
     targetHost: raw.targetHost ?? '127.0.0.1',
     // null = 自动发现：未显式配置时由 resolveTarget() 运行时读宿主 webServer 的
-    // 实测监听端口（兜底 19387）。19387 只是 dsh-desktop-host 写死的当前字面量，
-    // 会被 profile 层 webserver 行覆盖、也会随版本漂移，不能当唯一来源。
+    // 实测监听端口（兜底 19387）。端口不是契约：0.2.1 起 dsh-desktop-host 用
+    // `--port 0` 随机端口（19387 已从 asar 消失），只有实测值才可信。
     targetPort: raw.targetPort ?? null,
     sessionTtlHours: raw.sessionTtlHours ?? 24,
     maxLoginAttempts: raw.maxLoginAttempts ?? 5,
