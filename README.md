@@ -275,14 +275,14 @@ profile 配置是**加载期**读取的，改完必须重启桌面端才生效�
 ## 版本兼容
 
 插件在 `package.json` 中声明了 `dsh.engines.dsh` 与 `peerDependencies["@deepseek-ai/dsh"]`
-（均为 `>=0.1.7-alpha.0 <0.1.8 || >=0.2.0-alpha.0 <0.3.0 || >=0.2.1-alpha.0 <0.3.0`）与 `engines.node`（`^22.19.0 || >=24.0.0`）。
+（均为 `>=0.1.7-alpha.0 <0.1.8 || >=0.2.0-alpha.0 <0.3.0 || >=0.2.1-alpha.0 <0.3.0 || >=0.2.2-alpha.0 <0.3.0`）与 `engines.node`（`^22.19.0 || >=24.0.0`）。
 
 > **闸只读 `peerDependencies`**：dsh 在安装期（插件管理器 preflight）与启动期（profile
 > preflight）都会用 `peerDependencies` 对运行时版本做兼容校验（`includePrerelease: true`），
 > 不匹配的插件会被拒绝安装或**整个 bundle 不加载**（stderr：`skipping profile bundle`）。
 > 判定函数从不读 `dsh.engines.dsh`——两者必须逐字一致（`test/supply-chain.test.js` 守护）。
 > 宿主侧判定带 `includePrerelease`，而 pnpm 安装期是严格 semver——预发布版必须有**同元组**
-> 预发布下界才被满足，所以 0.1.7-`rc.*`、0.2.0-`rc.*`、0.2.1-`rc.*` 各有自己的 clause。
+> 预发布下界才被满足，所以 0.1.7-`rc.*`、0.2.0-`rc.*`、0.2.1-`rc.*`、0.2.2-`rc.*` 各有自己的 clause。
 > 上界 `<0.3.0` 让未来的 `0.3.0-*` 必须先验证再放行。
 
 | dsh 桌面运行时 | 状态 |
@@ -290,7 +290,8 @@ profile 配置是**加载期**读取的，改完必须重启桌面端才生效�
 | `0.1.5-*` / `0.1.6-*` 及更早 | ❌ 不支持（契约收窄，见下） |
 | `0.1.7-alpha.0` ~ `0.1.7-rc.*` | ✅ 正常工作 |
 | `0.2.0-alpha.0` ~ `0.2.0-rc.*` | ✅ 正常工作 |
-| `0.2.1-alpha.0` ~ `0.2.1-rc.*` | ✅ **当前适配目标**；真机闸放行 + 对真实宿主实测通过（见下） |
+| `0.2.1-alpha.0` ~ `0.2.1-rc.*` | ✅ 正常工作；真机闸放行 + 对真实宿主实测通过（见下） |
+| `0.2.2-alpha.0` ~ `0.2.2-rc.*` | ✅ **当前适配目标**；真机闸 PASS + 契约逐条复核零漂移（见下） |
 
 > 契约收窄（2026-09-27）：桌面运行时基线是 0.1.7-rc.2，旧线不再支持。保留 `>=0.1.5-` 段会让
 > pnpm 把 `@deepseek-ai/dsh` 解析到 `0.1.5-rc.3` 并装进本仓 `node_modules`（实测发生过）。
@@ -329,6 +330,44 @@ asar 解包源码比对 + **真机闸实测 + 真实宿主端到端实测**，�
 
 测试：`node --test`（**173 例全绿、0 跳过**，含 3 例 `desktop-live-host` 对**真实运行中的
 0.2.1-rc.2 桌面宿主**实测：直连 401 基线、门卫改写 Host 后过栅栏、响应字节一致）。
+
+### dsh 0.2.2-rc.1 适配结论（2026-11-06）
+
+对桌面端 `D:\DeepSeek Harness`（`app.asar/dsh/package.json` 的 `version` = **0.2.2-rc.1**）做了
+asar 解包源码逐条复核 + **宿主自带 `evaluatePluginCompatibility` 真闸实测**。
+结论：**`src/`、`lib/client.js` 与 `cordis.patch.yml` 零改动**，改动只在声明面与守护测试。
+
+- **判定闸坐标又漂了，但语义没变**：0.2.2-rc.1 在 `dsh-app-boot/lib/index.js:1097-1116`
+  （`unmetRequirements()`）：顶层 `engines.dsh` 存在则它单独判定，否则逐条判 `@deepseek-ai/dsh*`
+  的 peer；`:1094` 的 `satisfies` 仍带 `{ includePrerelease: true }`，`:1129` 的
+  `evaluatePluginCompatibility` 返回 `undefined` = PASS。**每版都要重 grep，别引旧行号**。
+- **补 0.2.2 段的真实理由是「装不上」，不是「加载被拒」**（实测数据）：
+  旧区间 `… || >=0.2.1-alpha.0 <0.3.0` 在宿主闸下判 `0.2.2-rc.1` → **PASS**
+  （`includePrerelease` 放过 `<0.3.0` 的预发布），但 **pnpm 严格模式 → `false`**。
+  补段后两种模式一致为 `true`；反向对照 `0.3.0` → 宿主闸 **REJECT**（真负例）。
+- **反代目标端口仍然必须自动发现**：`dsh-desktop-host/lib/index.js:449-455` 依旧写
+  `args: ["--no-open", "--host", "127.0.0.1", "--port", "0"]`；`dsh-host-webserver/lib/index.js:335`
+  `super(ctx, "webServer")`、`:342` 的 `port` getter 取 `server.address().port` 实测值——
+  插件读 `ctx.get('webServer').port` 的路径未变。
+- **Host/Origin 信任围栏语义未变**（`dsh-client-connection/lib/index.js:240-249`
+  `isTrustedApiRequest`）：Host 须为 loopback / `trustedHosts` / bind 地址，拒绝
+  `Sec-Fetch-Site: cross-site`，`Origin` 存在时须与 Host 同源。门卫的「改写三头」方案照旧有效。
+- **浏览器鉴权契约零漂移**：`COOKIE_PREFIX = "dsh-auth-"` + `cookieName(authority)` =
+  `base64url(sha256(authority))`（`:335-337`）；`requestAudience()`（`:307-316`）在
+  **HTTP 监听器下仍取 `host`**（只有 `secure` 才取 `origin`），而门卫→宿主这一跳是 http，
+  故按 `targetHost:targetPort` 反推 cookie 名的逻辑成立；`authenticatedUrl()`（`:440-444`）
+  仍只加 `token` 查询参数，`:458-470` 仍是「`GET /` + 单个 token → 303 + 铸 cookie」。
+- **client 侧形状未变**：`dsh-api-gateway/lib/client.browser.js:1661-1667` 的 `$host` 仍是
+  `{ home, isLoopback }` 且缓存键仍是 `home`；`dsh-client-connection/lib/client.browser.js:1421-1424`
+  的 connection handle 仍是字面量对象（`isLoopback` 可写）；`window.__ModuleLoader__` 仍在
+  `dsh-client-modules` 里。`dsh.client` manifest 的 `platform: web` / `inject` / `immediately`
+  三键继续被识别。
+- **测试**：`node --test` **173 例全绿、0 跳过**（其中 3 例 `desktop-live-host` 打的是
+  **正在运行的 0.2.2-rc.1 桌面宿主**——`DSH_WEB_URL=http://127.0.0.1:29693`，随机端口；
+  直连基线 401、经门卫拿 401 而非 403、响应逐字节一致）。`test/supply-chain.test.js` 新增 0.2.2 段守护
+  （engines 正则 + 判定表行 `0.2.2-alpha.0` / `0.2.2-rc.1` / `0.2.2`），并补一条
+  **严格模式专用**负例 `0.3.0-alpha.0`（宿主闸模式下它会 PASS，注释已写明）。
+  **变异测试**：把两串区间改回旧值 → 3 条守护当场变红，恢复后全绿。
 
 ## 开发
 
